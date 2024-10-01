@@ -47,17 +47,13 @@ type RoleDefinition struct {
 	members []string
 }
 
-type RolePermissions struct {
-	models.UnifiedRolePermission
-}
-
 //// LIST FUNCTION
 
 func listAdCustomRoles(ctx context.Context, d *plugin.QueryData, _ *plugin.HydrateData) (interface{}, error) {
 	client, _, err := GetGraphClient(ctx, d)
 
 	if err != nil {
-		plugin.Logger(ctx).Error("azuread_custom_role.listAdCustomRoles", "connection_error", err) //TODO: fix
+		plugin.Logger(ctx).Error("azuread_custom_role.listAdCustomRoles", "connection_error", err)
 		return nil, err
 	}
 
@@ -71,11 +67,11 @@ func listAdCustomRoles(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydra
 	roleAssignments, err := client.RoleManagement().Directory().RoleAssignments().Get(context.Background(), nil)
 	if err != nil {
 		errObj := getErrorObject(err)
-		plugin.Logger(ctx).Error("listAdCustomRoles", "list_custom_role_error", errObj) //potentialy change
+		plugin.Logger(ctx).Error("listAdCustomRoles", "list_custom_role_error", errObj)
 		return nil, errObj
 	}
 
-	var ids []string
+	var ids []string //set of ids of all assumed roles in current directory
 	for _, assignment := range roleAssignments.GetValue() {
 		found := false
 		for _, id := range ids {
@@ -95,7 +91,9 @@ func listAdCustomRoles(ctx context.Context, d *plugin.QueryData, _ *plugin.Hydra
 				if id == *customRole.GetTemplateId() {
 					members, err := getMembersFromId(ctx, d, id)
 					if err != nil {
-						//todo: add error log
+						errObj := getErrorObject(err)
+						plugin.Logger(ctx).Error("listAdCustomRoles", "list_custom_role_error", errObj)
+						return nil, errObj
 					}
 					d.StreamListItem(ctx, &RoleDefinition{customRole, members})
 				}
@@ -122,14 +120,14 @@ func getAdCustomRole(ctx context.Context, d *plugin.QueryData, h *plugin.Hydrate
 	// Create client
 	client, _, err := GetGraphClient(ctx, d)
 	if err != nil {
-		plugin.Logger(ctx).Error("azuread_directory_role.getAdDirectoryRole", "connection_error", err) //fix
+		plugin.Logger(ctx).Error("azuread_custom_role.getAdCustomRole", "connection_error", err)
 		return nil, err
 	}
 
 	customRole, err := client.RoleManagement().Directory().RoleDefinitions().ByUnifiedRoleDefinitionId(CustomRoleId).Get(ctx, nil)
 	if err != nil {
 		errObj := getErrorObject(err)
-		plugin.Logger(ctx).Error("getAdDirectoryRole", "get_directory_role_error", errObj) //fix
+		plugin.Logger(ctx).Error("getCustomRole", "get_custom_error", errObj)
 		return nil, errObj
 	}
 
@@ -139,7 +137,6 @@ func getAdCustomRole(ctx context.Context, d *plugin.QueryData, h *plugin.Hydrate
 		plugin.Logger(ctx).Error("getAdCustomRole", "get_custom_role_error", errObj)
 		return nil, errObj
 	}
-	//todo: add error log
 	return &RoleDefinition{customRole, members}, nil
 }
 
@@ -154,7 +151,7 @@ func getCustomRoleMembers(_ context.Context, d *transform.TransformData) (interf
 
 //// TRANSFORM FUNCTIONS
 
-// iterates over all role permission resources of the role
+// iterates over all role permission resources of the role and returns a list of json formating
 func getRolePermissions(_ context.Context, d *transform.TransformData) (interface{}, error) {
 	data := d.HydrateItem.(*RoleDefinition)
 	permissionArray := data.role.GetRolePermissions()
@@ -179,11 +176,13 @@ func getRolePermissions(_ context.Context, d *transform.TransformData) (interfac
 	return resourceArr, nil
 }
 
+// returns the role id from the UnifiedRoleDefinitionable struct
 func getRoleId(_ context.Context, d *transform.TransformData) (interface{}, error) {
 	data := d.HydrateItem.(*RoleDefinition)
 	return *data.role.GetId(), nil
 }
 
+// returns the role description (if exists) from the UnifiedRoleDefinitionable struct, "No Description" otherwise
 func getRoleDescripsion(_ context.Context, d *transform.TransformData) (interface{}, error) {
 	data := d.HydrateItem.(*RoleDefinition)
 	if data.role.GetDescription() == nil {
@@ -192,16 +191,19 @@ func getRoleDescripsion(_ context.Context, d *transform.TransformData) (interfac
 	return *data.role.GetDescription(), nil
 }
 
+// returns the role display name from the UnifiedRoleDefinitionable struct
 func getRoleDisplayName(_ context.Context, d *transform.TransformData) (interface{}, error) {
 	data := d.HydrateItem.(*RoleDefinition)
 	return *data.role.GetDisplayName(), nil
 }
 
+// returns the role templateId from the UnifiedRoleDefinitionable struct
 func getRoleTemplateId(_ context.Context, d *transform.TransformData) (interface{}, error) {
 	data := d.HydrateItem.(*RoleDefinition)
 	return *data.role.GetTemplateId(), nil
 }
 
+// returns the display name as the title, or the id if name doesn't exist
 func getCustomRoleTitle(_ context.Context, d *transform.TransformData) (interface{}, error) {
 	data := d.HydrateItem.(*RoleDefinition)
 	if data == nil {
@@ -218,16 +220,19 @@ func getCustomRoleTitle(_ context.Context, d *transform.TransformData) (interfac
 
 //// HELPER FUNCTIONS
 
+// returns a list of the ids of all principals who have this role assumed (not only directly by user)
 func getMembersFromId(ctx context.Context, d *plugin.QueryData, id string) ([]string, error) {
 	client, _, err := GetGraphClient(ctx, d)
 	if err != nil {
-		plugin.Logger(ctx).Error("azuread_custom_role.listAdCustomRoles", "connection_error", err) //TODO: fix
+		plugin.Logger(ctx).Error("azuread_custom_role", "connection_error", err)
 		return nil, err
 	}
 	var member_ids []string
 	assignments, err := client.RoleManagement().Directory().RoleAssignments().Get(context.Background(), nil)
 	if err != nil {
-		//todo" fix
+		errObj := getErrorObject(err)
+		plugin.Logger(ctx).Error("azuread_custom_role", "list_custom_role_error", errObj)
+		return nil, errObj
 	}
 	for _, assignment := range assignments.GetValue() {
 		newId := *assignment.GetRoleDefinitionId()
